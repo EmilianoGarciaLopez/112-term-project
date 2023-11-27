@@ -33,6 +33,26 @@ class Game:
         self.sidePots = []  # tuples: (pot size, eligble players)
         self.stage = 0
 
+    def resetGame(self):
+        self.deck = Deck()
+
+        self.communityCards = []
+        self.stage = 0
+
+        self.pot = 0
+        self.actionTaken = False
+        self.hasRaised = False
+        self.maxRaise = 0
+        self.currentPlayerIndex = 0
+        self.consecutiveCalls = 0
+        self.sidePots = []
+
+        for player in self.players:
+            player.resetForNewRound()
+            player.hand = self.deck.draw(NUM_PLAYER_CARDS)
+            player.isFolded = False
+            player.isAllIn = False
+
     def dealFlop(self):
         if self.stage == 0:
             self.communityCards.extend(self.deck.draw(NUM_FLOP_CARDS))
@@ -76,7 +96,13 @@ class Game:
 
             if isinstance(currentPlayer, BotPlayer) and not currentPlayer.isFolded:
                 currentPlayer.botAction(self)
+                self.actionTaken = True
             else:
+                # if isinstance(currentPlayer, Player) and not currentPlayer.isFolded:
+                #     print("Human player's turn.")
+                #     break
+                #! fix this to account for re-raising
+
                 # if round is complete
                 activePlayers = [p for p in self.players if not p.isFolded]
                 if self.consecutiveCalls >= len(activePlayers) - 1:
@@ -119,6 +145,7 @@ class Game:
         if winningPlayer:
             print(f"Winner detected with {bestEvalScore}")
             self.awardPot(winningPlayer)
+            self.resetGame()
 
     def awardPot(self, winningPlayer):
         winningPlayer.chips += self.pot
@@ -160,12 +187,13 @@ class Player:
             return amount
 
     def call(self, game):
-        callAmount = game.maxRaise
+        callAmount = game.maxRaise - self.chipsBetInRound
         if self.chips >= callAmount:
             self.chips -= callAmount
             game.addToPot(callAmount)
             game.consecutiveCalls += 1
-            print(f"Player calls ${callAmount}")
+            print(f"Consecutive calls {game.consecutiveCalls}")
+            self.chipsBetInRound += callAmount
         else:
             print("Player does not have enough chips and goes all-in")
             self.allIn(game)
@@ -185,10 +213,12 @@ class BotPlayer(Player):
             game.actionTaken = True
         elif action == "call":
             self.call(game)
+            game.actionTaken = True
             print(f"{botIdentifier} calls ${game.maxRaise}")
         elif action == "raise":
             raiseAmount = game.maxRaise + 20 if game.hasRaised else 20
             self.bet(raiseAmount, game)
+            game.actionTaken = True
             print(f"{botIdentifier} raises ${raiseAmount}")
 
 
@@ -305,6 +335,7 @@ def onMousePress(app, mouseX, mouseY):
         if app.game.hasRaised:
             print("Human player calls")
             humanPlayer.call(app.game)
+            app.game.actionTaken = True
         else:
             print("Human player checks")
             app.game.actionTaken = True
