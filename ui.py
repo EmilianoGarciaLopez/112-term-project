@@ -84,7 +84,7 @@ class Game:
                     self.advanceStage()
                     break
 
-                    # Check if the game should end
+                # check if game should end
                 if self.stage == 3 or all(
                     p.isFolded
                     for p in self.players
