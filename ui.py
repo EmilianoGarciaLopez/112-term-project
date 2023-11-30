@@ -82,14 +82,20 @@ class Game:
     def updateRaise(self, totalRoundBet):
         if totalRoundBet > self.maxRaise:
             self.maxRaise = totalRoundBet
+            self.hasRaised = True
+            print(
+                f"Raise updated: maxRaise = {self.maxRaise}, hasRaised = {self.hasRaised}"
+            )
         self.hasRaised = True
         self.addToPot(
             totalRoundBet - self.players[self.currentPlayerIndex].chipsBetInRound
-        )  #! TEST: make sure this accounts for amount already bet
+        )
         self.consecutiveCalls = 0
+        print(
+            f"Raise complete: maxRaise = {self.maxRaise}, hasRaised = {self.hasRaised}, consecutiveCalls = {self.consecutiveCalls}"
+        )
 
     def nextPlayer(self):
-        # continue until human player
         while True:
             self.currentPlayerIndex = (self.currentPlayerIndex + 1) % NUM_PLAYERS
             currentPlayer = self.players[self.currentPlayerIndex]
@@ -97,27 +103,36 @@ class Game:
             if isinstance(currentPlayer, BotPlayer) and not currentPlayer.isFolded:
                 currentPlayer.botAction(self)
                 self.actionTaken = True
-            else:
-                # if isinstance(currentPlayer, Player) and not currentPlayer.isFolded:
-                #     print("Human player's turn.")
-                #     break
-                #! fix this to account for re-raising
+            elif not currentPlayer.isFolded:
+                self.actionTaken = False
+                break
 
-                # if round is complete
-                activePlayers = [p for p in self.players if not p.isFolded]
-                if self.consecutiveCalls >= len(activePlayers) - 1:
-                    self.resetRound()  # Resetting the round TODO: implement multi-round functionality
-                    self.advanceStage()
-                    break
+            # if currentPlayer.checkOrCall == "Call":
+            #     self.consecutiveCalls += 1
+            # else:
+            #     self.consecutiveCalls = 0
 
-                # check if game should end
-                if self.stage == 3 or all(
-                    p.isFolded
-                    for p in self.players
-                    if p != self.players[self.currentPlayerIndex]
-                ):
-                    self.determineWinner()
-                    break
+            print(
+                f"Next player: checkOrCall = {currentPlayer.checkOrCall}, consecutiveCalls = {self.consecutiveCalls}"
+            )
+
+        if self.stage < 3:
+            if (
+                self.consecutiveCalls
+                >= len([p for p in self.players if not p.isFolded]) - 1
+            ):
+                self.resetRound()
+                self.advanceStage()
+        else:
+            # check that the final betting round has concluded
+            if (
+                self.consecutiveCalls
+                >= len([p for p in self.players if not p.isFolded]) - 1
+            ):
+                self.determineWinner()
+
+        for player in self.players:
+            player.updateCheckOrCall(self)
 
     def resetRound(self):
         self.actionTaken = False
@@ -126,7 +141,10 @@ class Game:
         self.consecutiveCalls = 0
         self.sidePots = []
         for player in self.players:
-            player.resetForNewRound()  # TODO: refactor
+            player.resetForNewRound()
+        print(
+            f"Round reset: hasRaised = {self.hasRaised}, maxRaise = {self.maxRaise}, consecutiveCalls = {self.consecutiveCalls}"
+        )
 
     def determineWinner(self):
         if self.stage != 3:  # only runs at end of game
@@ -159,6 +177,79 @@ class Player:
         self.chips = 1000
         self.isAllIn = False
         self.chipsBetInRound = 0
+        self.checkOrCall = "Check"
+
+    def evaluateHandStrength(self, communityCards):
+        fullHand = self.hand + communityCards
+
+        # to chekc for consecutive values
+        sortedHand = sorted(fullHand, key=Card.get_rank_int)
+
+        suitCounts = {}
+        rankCounts = {}
+        for card in sortedHand:
+            suit = Card.get_suit_int(card)
+            rank = Card.get_rank_int(card)
+            suitCounts[suit] = suitCounts.get(suit, 0) + 1
+            rankCounts[rank] = rankCounts.get(rank, 0) + 1
+
+        isFlush = False
+        isStraight = False
+        flushSuit = None
+        for suit, count in suitCounts.items():
+            if count >= 5:
+                isFlush = True
+                flushSuit = suit
+                break
+
+        ranks = list(rankCounts.keys())
+        ranks.sort()
+        # Ace can also be 1 for straights
+        if 14 in ranks:  # * ace rank = 14
+            ranks.append(1)
+        for i in range(len(ranks) - 4):
+            if ranks[i + 4] - ranks[i] == 4:
+                isStraight = True
+                break
+
+        if isFlush and isStraight:
+            flushCards = [
+                card for card in sortedHand if Card.get_suit_int(card) == flushSuit
+            ]
+            flushRanks = [Card.get_rank_int(card) for card in flushCards]
+            flushRanks.sort()
+            if flushRanks[-1] == 14 and flushRanks[-5] == 10:
+                return "Royal Flush"
+            else:
+                return "Straight Flush"
+
+        # pairs, three-of-a-kind, and quads
+        pairsCount = sum(count == 2 for count in rankCounts.values())
+        tripletsCount = sum(count == 3 for count in rankCounts.values())
+        quadsCount = sum(count == 4 for count in rankCounts.values())
+
+        if quadsCount:
+            return "Four of a Kind"
+        elif tripletsCount and pairsCount:
+            return "Full House"
+        elif isFlush:
+            return "Flush"
+        elif isStraight:
+            return "Straight"
+        elif tripletsCount:
+            return "Three of a Kind"
+        elif pairsCount == 2:
+            return "Two Pair"
+        elif pairsCount:
+            return "One Pair"
+        else:
+            return "High Card"
+
+    def canCheck(self, game):
+        return game.maxRaise == 0
+
+    def updateCheckOrCall(self, game):
+        self.checkOrCall = "Check" if self.canCheck(game) else "Call"
 
     def allIn(self, game):
         allInAmount = self.chips
@@ -201,25 +292,29 @@ class Player:
 
 class BotPlayer(Player):
     def botAction(self, game):
+        self.updateCheckOrCall(game)
+
         if game.hasRaised:
-            action = choice(["call", "call", "call"])
+            action = choice(["call"])
         else:
-            action = choice(["check", "check", "check", "raise"])
+            action = choice(["check", "call", "raise"])
 
         botIdentifier = f"Bot {game.players.index(self) + 1}"
 
-        if action == "check":
+        if action == "check" and self.canCheck(game):
             print(f"{botIdentifier} checks")
-            game.actionTaken = True
         elif action == "call":
             self.call(game)
-            game.actionTaken = True
             print(f"{botIdentifier} calls ${game.maxRaise}")
         elif action == "raise":
-            raiseAmount = game.maxRaise + 20 if game.hasRaised else 20
+            raiseAmount = game.maxRaise + 20
             self.bet(raiseAmount, game)
-            game.actionTaken = True
             print(f"{botIdentifier} raises ${raiseAmount}")
+        elif action == "fold":
+            self.fold()
+            print(f"{botIdentifier} folds")
+
+        game.actionTaken = True
 
 
 # * graphics
@@ -262,12 +357,17 @@ def drawPlayerArea(app, playerIndex, player):
     drawLabel(str(player.chips), playerX, playerY, size=14, fill="white")
     drawCards(app, playerX, playerY + 40, player.hand, player.isFolded)
 
+    strengthFill = "black" if playerIndex in (3, 4) else "white"
+
+    if not player.isFolded:
+        handStrength = player.evaluateHandStrength(app.game.communityCards)
+        drawLabel(handStrength, playerX, playerY - 40, size=14, fill=strengthFill)
+
 
 def drawCommunityCards(app):
     startX = app.width / 2
     startY = app.height / 2 - Y_OFFSET - app.padding
 
-    # Only draw the number of cards based on the current stage
     numCardsToDraw = len(app.game.communityCards)
     drawCards(app, startX, startY, app.game.communityCards[:numCardsToDraw])
 
@@ -332,7 +432,7 @@ def onMousePress(app, mouseX, mouseY):
 
     # check/call dependent on hasRaised
     if isWithinButton(app, mouseX, mouseY, app.checkButtonLocation):
-        if app.game.hasRaised:
+        if humanPlayer.checkOrCall == "Call":
             print("Human player calls")
             humanPlayer.call(app.game)
             app.game.actionTaken = True
@@ -373,8 +473,8 @@ def redrawAll(app):
         size=20,
         fill="white",
     )
-    checkStr = "Check" if app.game.maxRaise == 0 else "Call"
-    drawButton(app, checkStr, app.checkButtonLocation)
+    humanPlayer = app.game.players[0]
+    drawButton(app, humanPlayer.checkOrCall, app.checkButtonLocation)
     drawButton(app, "Raise", app.raiseButtonLocation)
     drawButton(app, "Fold", app.foldButtonLocation)
 

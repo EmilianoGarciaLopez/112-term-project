@@ -1,1 +1,3 @@
-I have no updates for my design, as of this moment.
+I added the round and side-pot functionality, but it somehow broke the betting 
+functionality that was already present for previous submissions. I'm going to have 
+to spend more time programming the actual game than I thought
