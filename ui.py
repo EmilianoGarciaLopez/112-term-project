@@ -179,34 +179,31 @@ class Player:
         self.chipsBetInRound = 0
         self.checkOrCall = "Check"
 
-    def calculateWinningProbability(self, game, numSimulations=10000):
+    def calculateWinningProbability(self, game, numSimulations=1000):
         wins = 0
-        for i in range(numSimulations):
-            # copy the deck and remove known cards
-            simDeck = Deck()
-            knownCards = self.hand + game.communityCards
-            for card in knownCards:
-                simDeck.cards.remove(card)
+        knownCards = set(self.hand + game.communityCards)
+        numCommunityNeeded = NUM_COMMUNITY_CARDS - len(game.communityCards)
+
+        for _ in range(numSimulations):
+            # Efficient deck copying and card removal
+            simDeck = (
+                Deck()
+            )  # Replace with a more efficient copying method if available
+            simDeck.cards = [card for card in simDeck.cards if card not in knownCards]
 
             # other players' hands
             simHands = [simDeck.draw(NUM_PLAYER_CARDS) for _ in range(NUM_PLAYERS - 1)]
-            simCommunity = game.communityCards + simDeck.draw(
-                NUM_COMMUNITY_CARDS - len(game.communityCards)
-            )
+            simCommunity = game.communityCards + simDeck.draw(numCommunityNeeded)
 
             # Evaluate hand strengths
             myHandStrength = game.evaluator.evaluate(self.hand, simCommunity)
-            otherHandStrengths = [
-                game.evaluator.evaluate(hand, simCommunity) for hand in simHands
-            ]
-
             if all(
-                myHandStrength <= otherStrength for otherStrength in otherHandStrengths
+                myHandStrength <= game.evaluator.evaluate(hand, simCommunity)
+                for hand in simHands
             ):
                 wins += 1
 
-        probability = wins / numSimulations
-        return probability
+        return wins / numSimulations
 
     def evaluateHandStrength(self, communityCards):
         fullHand = self.hand + communityCards
@@ -258,7 +255,7 @@ class Player:
         quadsCount = sum(count == 4 for count in rankCounts.values())
 
         if quadsCount:
-            return "Four of a Kind"
+            return "Quads"
         elif tripletsCount and pairsCount:
             return "Full House"
         elif isFlush:
@@ -266,11 +263,11 @@ class Player:
         elif isStraight:
             return "Straight"
         elif tripletsCount:
-            return "Three of a Kind"
+            return "Triplets"
         elif pairsCount == 2:
             return "Two Pair"
         elif pairsCount:
-            return "One Pair"
+            return "Pair"
         else:
             return "High Card"
 
@@ -386,19 +383,16 @@ def drawPlayerArea(app, playerIndex, player):
     drawLabel(str(player.chips), playerX, playerY, size=14, fill="white")
     drawCards(app, playerX, playerY + 40, player.hand, player.isFolded)
 
-    strengthFill = "black" if playerIndex in (3, 4) else "white"
-
     if not player.isFolded:
         handStrength = player.evaluateHandStrength(app.game.communityCards)
 
-        # Calculate winning probability (may need to adjust numSimulations for performance)
         winProbability = (
-            player.calculateWinningProbability(app.game, numSimulations=500) * 100
+            player.calculateWinningProbability(app.game, numSimulations=2000) * 100
         )  # As percentage
 
-        # Combine hand strength and winning probability in the label
-        label = f"{handStrength} ({winProbability:.1f}%)"
-        drawLabel(label, playerX, playerY - 40, size=14, fill=strengthFill)
+        probLabel = f"{handStrength} ({winProbability:.1f}%)"  # https://www.geeksforgeeks.org/python-string-format-method/
+
+        drawLabel(probLabel, playerX, playerY - 40, size=14, fill="black")
 
 
 def drawCommunityCards(app):
