@@ -179,6 +179,35 @@ class Player:
         self.chipsBetInRound = 0
         self.checkOrCall = "Check"
 
+    def calculateWinningProbability(self, game, numSimulations=10000):
+        wins = 0
+        for i in range(numSimulations):
+            # copy the deck and remove known cards
+            simDeck = Deck()
+            knownCards = self.hand + game.communityCards
+            for card in knownCards:
+                simDeck.cards.remove(card)
+
+            # other players' hands
+            simHands = [simDeck.draw(NUM_PLAYER_CARDS) for _ in range(NUM_PLAYERS - 1)]
+            simCommunity = game.communityCards + simDeck.draw(
+                NUM_COMMUNITY_CARDS - len(game.communityCards)
+            )
+
+            # Evaluate hand strengths
+            myHandStrength = game.evaluator.evaluate(self.hand, simCommunity)
+            otherHandStrengths = [
+                game.evaluator.evaluate(hand, simCommunity) for hand in simHands
+            ]
+
+            if all(
+                myHandStrength <= otherStrength for otherStrength in otherHandStrengths
+            ):
+                wins += 1
+
+        probability = wins / numSimulations
+        return probability
+
     def evaluateHandStrength(self, communityCards):
         fullHand = self.hand + communityCards
 
@@ -361,7 +390,15 @@ def drawPlayerArea(app, playerIndex, player):
 
     if not player.isFolded:
         handStrength = player.evaluateHandStrength(app.game.communityCards)
-        drawLabel(handStrength, playerX, playerY - 40, size=14, fill=strengthFill)
+
+        # Calculate winning probability (may need to adjust numSimulations for performance)
+        winProbability = (
+            player.calculateWinningProbability(app.game, numSimulations=500) * 100
+        )  # As percentage
+
+        # Combine hand strength and winning probability in the label
+        label = f"{handStrength} ({winProbability:.1f}%)"
+        drawLabel(label, playerX, playerY - 40, size=14, fill=strengthFill)
 
 
 def drawCommunityCards(app):
