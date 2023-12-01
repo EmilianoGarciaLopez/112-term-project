@@ -1,5 +1,4 @@
 from math import cos, radians, sin
-from random import choice
 
 from cmu_graphics import *
 from treys import Card, Deck, Evaluator
@@ -46,6 +45,7 @@ class Game:
         self.currentPlayerIndex = 0
         self.consecutiveCalls = 0
         self.sidePots = []
+        self.updateAllPlayersPotOdds()
 
         for player in self.players:
             player.resetForNewRound()
@@ -57,11 +57,13 @@ class Game:
         if self.stage == 0:
             self.communityCards.extend(self.deck.draw(NUM_FLOP_CARDS))
             self.stage = 1
+            self.updateAllPlayersPotOdds()
 
     def dealRiver(self):
         if self.stage == 1 or self.stage == 2:
             self.communityCards.append(self.deck.draw(1)[0])
             self.stage += 1
+            self.updateAllPlayersPotOdds()
 
     def addToPot(self, amount, player=None):
         if player and player.isAllIn:
@@ -95,7 +97,17 @@ class Game:
             f"Raise complete: maxRaise = {self.maxRaise}, hasRaised = {self.hasRaised}, consecutiveCalls = {self.consecutiveCalls}"
         )
 
+    def updateAllPlayersPotOdds(self):
+        for player in self.players:
+            player.calculatePotOdds(self)
+
     def nextPlayer(self):
+        # if only one player remains. TODO: make it so that player doesn't need to accept this by checking — it should just assign the pot
+        active_players = [p for p in self.players if not p.isFolded]
+        if len(active_players) == 1:
+            self.determineWinner()
+            return
+
         while True:
             self.currentPlayerIndex = (self.currentPlayerIndex + 1) % NUM_PLAYERS
             currentPlayer = self.players[self.currentPlayerIndex]
@@ -107,28 +119,12 @@ class Game:
                 self.actionTaken = False
                 break
 
-            # if currentPlayer.checkOrCall == "Call":
-            #     self.consecutiveCalls += 1
-            # else:
-            #     self.consecutiveCalls = 0
-
-            print(
-                f"Next player: checkOrCall = {currentPlayer.checkOrCall}, consecutiveCalls = {self.consecutiveCalls}"
-            )
-
-        if self.stage < 3:
-            if (
-                self.consecutiveCalls
-                >= len([p for p in self.players if not p.isFolded]) - 1
-            ):
+        # final stage
+        if self.consecutiveCalls >= len(active_players) or self.stage == 3:
+            if self.stage < 3:
                 self.resetRound()
                 self.advanceStage()
-        else:
-            # check that the final betting round has concluded
-            if (
-                self.consecutiveCalls
-                >= len([p for p in self.players if not p.isFolded]) - 1
-            ):
+            else:
                 self.determineWinner()
 
         for player in self.players:
@@ -140,6 +136,7 @@ class Game:
         self.maxRaise = 0
         self.consecutiveCalls = 0
         self.sidePots = []
+        self.updateAllPlayersPotOdds()
         for player in self.players:
             player.resetForNewRound()
         print(
@@ -147,6 +144,12 @@ class Game:
         )
 
     def determineWinner(self):
+        # If only one player is left, they win
+        activePlayers = [p for p in self.players if not p.isFolded]
+        if len(activePlayers) == 1:
+            self.awardPot(activePlayers[0])
+            self.resetGame()
+            return
         if self.stage != 3:  # only runs at end of game
             return
 
@@ -179,17 +182,31 @@ class Player:
         self.chipsBetInRound = 0
         self.checkOrCall = "Check"
 
+        self.potOdds = float("inf")
+        self.winProbability = 0
+        self.worthCalling = False
+
     def calculateWinningProbability(self, game, numSimulations=1000):
         wins = 0
         knownCards = set(self.hand + game.communityCards)
         numCommunityNeeded = NUM_COMMUNITY_CARDS - len(game.communityCards)
 
+        activePlayersCount = len(
+            [
+                player
+                for player in game.players
+                if not player.isFolded and player != self
+            ]
+        )
+
         for _ in range(numSimulations):
             simDeck = Deck()
             simDeck.cards = [card for card in simDeck.cards if card not in knownCards]
 
-            # other players' hands
-            simHands = [simDeck.draw(NUM_PLAYER_CARDS) for _ in range(NUM_PLAYERS - 1)]
+            # simulate hands for active players
+            simHands = [
+                simDeck.draw(NUM_PLAYER_CARDS) for _ in range(activePlayersCount)
+            ]
             simCommunity = game.communityCards + simDeck.draw(numCommunityNeeded)
 
             myHandStrength = game.evaluator.evaluate(self.hand, simCommunity)
@@ -201,16 +218,21 @@ class Player:
 
         return wins / numSimulations
 
-    def calculatePotOdds(self, game):  # * remember: percentages are returned
+    def calculatePotOdds(self, game):
         callAmount = game.maxRaise - self.chipsBetInRound
         winProbability = self.calculateWinningProbability(game) * 100
 
         if callAmount <= 0:
-            return 100, winProbability, True
+            self.potOdds = float("inf")
+            self.winProbability = winProbability
+            self.worthCalling = True
+            return
 
-        potOdds = game.pot * 100 / callAmount
+        potOdds = game.pot / callAmount
         worthCalling = winProbability > (1 / (1 + potOdds)) * 100
-        return potOdds, winProbability, worthCalling
+        self.potOdds = potOdds
+        self.winProbability = winProbability
+        self.worthCalling = worthCalling
 
     def evaluateHandStrength(self, communityCards):
         fullHand = self.hand + communityCards
@@ -308,6 +330,7 @@ class Player:
         else:
             self.chips -= amount
             self.chipsBetInRound += amount
+            game.addToPot(amount)
             game.updateRaise(totalRoundBet)
             return amount
 
@@ -324,31 +347,57 @@ class Player:
             self.allIn(game)
 
 
+import random  # ! doesn't work if I import random at the top. Suspect conflict with CMU grpahics
+
+
 class BotPlayer(Player):
     def botAction(self, game):
         self.updateCheckOrCall(game)
+        self.calculatePotOdds(game)
 
-        if game.hasRaised:
-            action = choice(["call"])
+        callAmount = game.maxRaise - self.chipsBetInRound
+        potSize = game.pot + callAmount
+        winProbability = self.winProbability / 100
+
+        # expected value
+        ev = potSize * winProbability
+
+        print(
+            f"ev: ${ev}, pot size: {potSize}, call amount: {callAmount}, win p {winProbability}"
+        )
+
+        randomSmallNumber = random.uniform(1, 25)  # using uniform for floats
+        if ev > (callAmount + randomSmallNumber):  # positive EV with some randomness
+            additionalEV = ev - callAmount
+            raiseMultiplier = random.uniform(1, 1.25)
+            raiseAmount = callAmount + additionalEV * raiseMultiplier
+
+            raiseAmount = int(min(raiseAmount, self.chips))
+
+            if raiseAmount > callAmount:
+                print(f"raises ${raiseAmount}")
+                self.bet(raiseAmount, game)
+            else:
+                # ff the bot can't raise due to chip limit
+                self.botCheckOrCall(game)
+
+        elif ev > callAmount:  # if EV justifies calling
+            self.botCheckOrCall(game)
+
         else:
-            action = choice(["check", "call", "raise"])
-
-        botIdentifier = f"Bot {game.players.index(self) + 1}"
-
-        if action == "check" and self.canCheck(game):
-            print(f"{botIdentifier} checks")
-        elif action == "call":
-            self.call(game)
-            print(f"{botIdentifier} calls ${game.maxRaise}")
-        elif action == "raise":
-            raiseAmount = game.maxRaise + 20
-            self.bet(raiseAmount, game)
-            print(f"{botIdentifier} raises ${raiseAmount}")
-        elif action == "fold":
+            print("folds")
             self.fold()
-            print(f"{botIdentifier} folds")
 
         game.actionTaken = True
+
+    def botCheckOrCall(self, game):
+        callAmount = game.maxRaise - self.chipsBetInRound
+        if callAmount == 0 or self.chips < callAmount:
+            print("checks")
+            game.consecutiveCalls += 1  #! TODO: unify check method
+        else:
+            print("calls")
+            self.call(game)
 
 
 # * graphics
@@ -364,6 +413,7 @@ def setupGame(app):
     app.foldButtonLocation = (900, 800)
 
     app.game = Game()
+    app.game.updateAllPlayersPotOdds()
 
 
 def drawTable(app):
@@ -394,10 +444,7 @@ def drawPlayerArea(app, playerIndex, player):
     if not player.isFolded:
         handStrength = player.evaluateHandStrength(app.game.communityCards)
 
-        potOdds, winProbability, worthCalling = player.calculatePotOdds(app.game)
-        worthCallingStr = "Call" if worthCalling else "Don't Call"
-
-        probLabel = f"{handStrength}, Win: {winProbability:.1f}%, Odds: {potOdds:.1f}, {worthCallingStr}"
+        probLabel = f"{handStrength}, Win: {player.winProbability:.1f}%"
 
         drawLabel(probLabel, playerX, playerY - 40, size=14, fill="black")
 
@@ -512,6 +559,7 @@ def redrawAll(app):
         fill="white",
     )
     humanPlayer = app.game.players[0]
+
     drawButton(app, humanPlayer.checkOrCall, app.checkButtonLocation)
     drawButton(app, "Raise", app.raiseButtonLocation)
     drawButton(app, "Fold", app.foldButtonLocation)

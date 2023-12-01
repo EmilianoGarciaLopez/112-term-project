@@ -1,3 +1,5 @@
 I've continued using the treys library for the card rank lookup table, since it provides a massive speed boost due to it using bitwise arithmetic and primes
 
 Other than that, no changes
+
+Other than fixing a few edge-cases, I believe that I have satisfied the MVP requirements
