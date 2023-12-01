@@ -1,0 +1,3 @@
+I've continued using the treys library for the card rank lookup table, since it provides a massive speed boost due to it using bitwise arithmetic and primes
+
+Other than that, no changes

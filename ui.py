@@ -185,17 +185,13 @@ class Player:
         numCommunityNeeded = NUM_COMMUNITY_CARDS - len(game.communityCards)
 
         for _ in range(numSimulations):
-            # Efficient deck copying and card removal
-            simDeck = (
-                Deck()
-            )  # Replace with a more efficient copying method if available
+            simDeck = Deck()
             simDeck.cards = [card for card in simDeck.cards if card not in knownCards]
 
             # other players' hands
             simHands = [simDeck.draw(NUM_PLAYER_CARDS) for _ in range(NUM_PLAYERS - 1)]
             simCommunity = game.communityCards + simDeck.draw(numCommunityNeeded)
 
-            # Evaluate hand strengths
             myHandStrength = game.evaluator.evaluate(self.hand, simCommunity)
             if all(
                 myHandStrength <= game.evaluator.evaluate(hand, simCommunity)
@@ -204,6 +200,17 @@ class Player:
                 wins += 1
 
         return wins / numSimulations
+
+    def calculatePotOdds(self, game):  # * remember: percentages are returned
+        callAmount = game.maxRaise - self.chipsBetInRound
+        winProbability = self.calculateWinningProbability(game) * 100
+
+        if callAmount <= 0:
+            return 100, winProbability, True
+
+        potOdds = game.pot * 100 / callAmount
+        worthCalling = winProbability > (1 / (1 + potOdds)) * 100
+        return potOdds, winProbability, worthCalling
 
     def evaluateHandStrength(self, communityCards):
         fullHand = self.hand + communityCards
@@ -230,7 +237,8 @@ class Player:
 
         ranks = list(rankCounts.keys())
         ranks.sort()
-        # Ace can also be 1 for straights
+
+        # ace can also be 1 for straights
         if 14 in ranks:  # * ace rank = 14
             ranks.append(1)
         for i in range(len(ranks) - 4):
@@ -386,11 +394,10 @@ def drawPlayerArea(app, playerIndex, player):
     if not player.isFolded:
         handStrength = player.evaluateHandStrength(app.game.communityCards)
 
-        winProbability = (
-            player.calculateWinningProbability(app.game, numSimulations=2000) * 100
-        )  # As percentage
+        potOdds, winProbability, worthCalling = player.calculatePotOdds(app.game)
+        worthCallingStr = "Call" if worthCalling else "Don't Call"
 
-        probLabel = f"{handStrength} ({winProbability:.1f}%)"  # https://www.geeksforgeeks.org/python-string-format-method/
+        probLabel = f"{handStrength}, Win: {winProbability:.1f}%, Odds: {potOdds:.1f}, {worthCallingStr}"
 
         drawLabel(probLabel, playerX, playerY - 40, size=14, fill="black")
 
