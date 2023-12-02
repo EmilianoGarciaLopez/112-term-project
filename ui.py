@@ -103,8 +103,8 @@ class Game:
 
     def nextPlayer(self):
         # if only one player remains. TODO: make it so that player doesn't need to accept this by checking — it should just assign the pot
-        active_players = [p for p in self.players if not p.isFolded]
-        if len(active_players) == 1:
+        activePlayers = [p for p in self.players if not p.isFolded]
+        if len(activePlayers) == 1:
             self.determineWinner()
             return
 
@@ -120,7 +120,7 @@ class Game:
                 break
 
         # final stage
-        if self.consecutiveCalls >= len(active_players) or self.stage == 3:
+        if self.consecutiveCalls >= len(activePlayers) or self.stage == 3:
             if self.stage < 3:
                 self.resetRound()
                 self.advanceStage()
@@ -378,7 +378,7 @@ class BotPlayer(Player):
                 print(f"raises ${raiseAmount}")
                 self.bet(raiseAmount, game)
             else:
-                # ff the bot can't raise due to chip limit
+                # if the bot can't raise due to chip limit
                 self.botCheckOrCall(game)
 
         elif ev > callAmount:  # if EV justifies calling
@@ -411,6 +411,9 @@ def setupGame(app):
     app.checkButtonLocation = (700, 800)
     app.raiseButtonLocation = (800, 800)
     app.foldButtonLocation = (900, 800)
+
+    app.betAmountStr = ""
+    app.raiseButtonLabel = "Bet: $0"
 
     app.game = Game()
     app.game.updateAllPlayersPotOdds()
@@ -525,11 +528,12 @@ def onMousePress(app, mouseX, mouseY):
             print("Human player checks")
             app.game.actionTaken = True
 
-    elif isWithinButton(app, mouseX, mouseY, app.raiseButtonLocation):
-        betAmount = app.game.maxRaise + 20
+    if isWithinButton(app, mouseX, mouseY, app.raiseButtonLocation):
+        betAmount = int(app.betAmountStr) if app.betAmountStr else 0
         humanPlayer.bet(betAmount, app.game)
-        print(f"Human player raises ${betAmount}")
+        print(f"Human player bets ${betAmount}")
         app.game.actionTaken = True
+        resetBetAmount(app)
 
     elif isWithinButton(app, mouseX, mouseY, app.foldButtonLocation):
         humanPlayer.fold()
@@ -539,6 +543,31 @@ def onMousePress(app, mouseX, mouseY):
     # move to next
     if app.game.actionTaken:
         app.game.nextPlayer()
+
+
+def onKeyPress(app, key):
+    if key.isdigit():
+        # Add digit to bet amount string and update the bet button label
+        app.betAmountStr += key
+        updateBetButtonLabel(app)
+    elif key == "delete" or key == "backspace":
+        # Remove the last digit and update the bet button label
+        app.betAmountStr = app.betAmountStr[:-1]
+        updateBetButtonLabel(app)
+
+
+def updateBetButtonLabel(app):
+    # Update the bet button label with the current bet amount
+    if app.betAmountStr:
+        app.raiseButtonLabel = "Bet: $" + app.betAmountStr
+    else:
+        app.raiseButtonLabel = "Bet: $0"
+
+
+def resetBetAmount(app):
+    # Reset the bet amount string and update the bet button label
+    app.betAmountStr = ""
+    updateBetButtonLabel(app)
 
 
 # * App Loop
@@ -561,7 +590,7 @@ def redrawAll(app):
     humanPlayer = app.game.players[0]
 
     drawButton(app, humanPlayer.checkOrCall, app.checkButtonLocation)
-    drawButton(app, "Raise", app.raiseButtonLocation)
+    drawButton(app, app.raiseButtonLabel, app.raiseButtonLocation)
     drawButton(app, "Fold", app.foldButtonLocation)
 
 
