@@ -1,19 +1,6 @@
-from math import cos, radians, sin
-
-from cmu_graphics import *
 from treys import Card, Deck, Evaluator
 
-# * Constants
-
-NUM_PLAYERS = 6
-NUM_PLAYER_CARDS = 2
-NUM_COMMUNITY_CARDS = 5
-NUM_FLOP_CARDS = 3
-Y_OFFSET = 100
-SMALL_BLIND_AMOUNT = 10
-BIG_BLIND_AMOUNT = 20
-INITIAL_CHIPS = 1000
-
+from constants import *
 
 # * Classes / Logic
 
@@ -22,10 +9,19 @@ class Game:
     def __init__(self):
         self.deck = Deck()
         self.evaluator = Evaluator()
-        self.players = [
-            Player(self.deck) if i == 0 else BotPlayer(self.deck)
-            for i in range(NUM_PLAYERS)
+
+        botPlayers = [
+            NaiveBotPlayer(self.deck),
+            ConservativeBotPlayer(self.deck),
+            TurnerBotPlayer(self.deck),
+            FishBotPlayer(self.deck),
+            AdvancedBotPlayer(self.deck),
         ]
+
+        random.shuffle(botPlayers)
+
+        self.players = [Player(self.deck)] + botPlayers
+
         self.communityCards = []
         self.pot = 0
         self.actionTaken = False
@@ -36,21 +32,25 @@ class Game:
         self.sidePots = []  # tuples: (pot size, eligble players)
         self.stage = 0
 
+        self.isFinished = False
+
         self.smallBlindIndex = 0
         self.bigBlindIndex = 1
 
         self.postBlinds()
+        self.updateAllPlayersPotOdds()
 
     def postBlinds(self):
         smallBlindPlayer = self.players[self.smallBlindIndex]
         bigBlindPlayer = self.players[self.bigBlindIndex]
 
-        smallBlindPlayer.bet(SMALL_BLIND_AMOUNT + 100, self)
-        bigBlindPlayer.bet(BIG_BLIND_AMOUNT + 180, self)
+        smallBlindPlayer.bet(SMALL_BLIND_AMOUNT, self)
+        bigBlindPlayer.bet(BIG_BLIND_AMOUNT, self)
 
-        # Set the current player to the one after the big blind
         self.currentPlayerIndex = (self.bigBlindIndex) % NUM_PLAYERS
         print(self.currentPlayerIndex)
+        # don't need to adjust current player since that is done elsewhere
+
         self.nextPlayer()
 
     def rotateBlinds(self):
@@ -92,7 +92,7 @@ class Game:
             self.stage += 1
             self.updateAllPlayersPotOdds()
 
-    def addToPot(self, amount, player=None):
+    def addToPot(self, amount, player=None):  # player parameter is for all-inning
         if player and player.isAllIn:
             self.handleSidePot(amount, player)
         else:
@@ -105,8 +105,31 @@ class Game:
             self.dealRiver()
 
     def handleSidePot(self, amount, allInPlayer):
-        eligiblePlayers = [p for p in self.players if not p.isFolded and not p.isAllIn]
-        self.sidePots.append((amount, eligiblePlayers))
+        allInAmount = allInPlayer.chipsBetInRound
+        remainingAmount = amount
+
+        # adjust side pot and main pots based on all-in amount
+        for i, (pot, eligiblePlayers) in enumerate(self.sidePots):
+            if allInAmount >= pot:
+                allInAmount -= pot
+            else:
+                extraAmount = pot - allInAmount
+                self.sidePots[i] = (allInAmount, eligiblePlayers)
+                self.sidePots.append((extraAmount, eligiblePlayers))
+                remainingAmount -= allInAmount
+                break
+
+        # then main pot is adjusted
+        if allInAmount > 0:
+            remainingAmount -= allInAmount
+            self.sidePots.append(
+                (
+                    allInAmount,
+                    [p for p in self.players if not p.isFolded and p != allInPlayer],
+                )
+            )
+
+        self.pot += remainingAmount
 
     def updateRaise(self, totalRoundBet):
         if totalRoundBet > self.maxRaise:
@@ -129,43 +152,54 @@ class Game:
             player.calculatePotOdds(self)
 
     def nextPlayer(self):
-        activePlayers = [p for p in self.players if not p.isFolded]
-        print(f"Active Players: {len(activePlayers)}")  # Debugging
-
-        if len(activePlayers) == 1:
-            self.determineWinner()
-            return
-
         while True:
+            activePlayers = [p for p in self.players if not p.isFolded]
+            print(f"Active Players: {len(activePlayers)}")  # Debugging
+            if len(activePlayers) == 1:
+                self.determineWinner()
+                break
+
             self.currentPlayerIndex = (self.currentPlayerIndex + 1) % NUM_PLAYERS
             currentPlayer = self.players[self.currentPlayerIndex]
             print(
                 f"Current Player Index: {self.currentPlayerIndex}, Folded: {currentPlayer.isFolded}"
             )  # Debugging
 
-            if isinstance(currentPlayer, BotPlayer) and not currentPlayer.isFolded:
+            if (
+                isinstance(
+                    currentPlayer,
+                    (
+                        NaiveBotPlayer,
+                        ConservativeBotPlayer,
+                        TurnerBotPlayer,
+                        FishBotPlayer,
+                        AdvancedBotPlayer,
+                    ),
+                )
+                and not currentPlayer.isFolded
+            ):
                 currentPlayer.botAction(self)
                 self.actionTaken = True
             elif not currentPlayer.isFolded:
                 self.actionTaken = False
                 break
 
-        activeNonAllInPlayers = len(
-            [p for p in self.players if not p.isFolded and not p.isAllIn]
-        )
-        print(
-            f"Consecutive Calls: {self.consecutiveCalls}, Active Non-All-In Players: {activeNonAllInPlayers}"
-        )  # Debugging
+            activeNonAllInPlayers = len(
+                [p for p in self.players if not p.isFolded and not p.isAllIn]
+            )
+            print(
+                f"Consecutive Calls: {self.consecutiveCalls}, Active Non-All-In Players: {activeNonAllInPlayers}"
+            )  # Debugging
 
-        if self.consecutiveCalls >= activeNonAllInPlayers or self.stage == 3:
-            if self.stage < 3:
-                self.resetRound()
-                self.advanceStage()
-            else:
-                self.determineWinner()
+            if self.consecutiveCalls >= activeNonAllInPlayers or self.stage == 3:
+                if self.stage < 3:
+                    self.resetRound()
+                    self.advanceStage()
+                else:
+                    self.determineWinner()
 
-        for player in self.players:
-            player.updateCheckOrCall(self)
+            for player in self.players:
+                player.updateCheckOrCall(self)
 
     def resetRound(self):
         self.actionTaken = False
@@ -185,6 +219,7 @@ class Game:
         activePlayers = [p for p in self.players if not p.isFolded]
         if len(activePlayers) == 1:
             self.awardPot(activePlayers[0])
+
             self.resetGame()
             self.rotateBlinds()  # Rotate blinds after each round
             return
@@ -206,11 +241,29 @@ class Game:
             print(f"Winner detected with {bestEvalScore}")
             self.awardPot(winningPlayer)
             self.resetGame()
-            self.rotateBlinds()  # Rotate blinds after determining the winner
+            self.rotateBlinds()
 
     def awardPot(self, winningPlayer):
         winningPlayer.chips += self.pot
         self.pot = 0
+
+        # Award side pots
+        for pot, eligiblePlayers in self.sidePots:
+            if winningPlayer in eligiblePlayers:
+                winningPlayer.chips += pot
+            else:
+                distAmount = pot / len(eligiblePlayers)
+                for player in eligiblePlayers:
+                    player.chips += distAmount
+
+        # Reset the side pots
+        self.sidePots = []
+
+        if self.players[0].chips == 0:
+            self.isFinished = True
+
+
+import random
 
 
 class Player:
@@ -226,7 +279,7 @@ class Player:
         self.winProbability = 0
         self.worthCalling = False
 
-    def calculateWinningProbability(self, game, numSimulations=1000):
+    def calculateWinningProbability(self, game, numSimulations=5_000):
         wins = 0
         knownCards = set(self.hand + game.communityCards)
         numCommunityNeeded = NUM_COMMUNITY_CARDS - len(game.communityCards)
@@ -274,7 +327,7 @@ class Player:
         self.winProbability = winProbability
         self.worthCalling = worthCalling
 
-    def evaluateHandStrength(self, communityCards):
+    def evaluateHandStrength(self, communityCards=[]):
         fullHand = self.hand + communityCards
 
         # to chekc for consecutive values
@@ -387,10 +440,93 @@ class Player:
             self.allIn(game)
 
 
-import random  # ! doesn't work if I import random at the top. Suspect conflict with CMU grpahics
+class FishBotPlayer(Player):
+    def botAction(self, game):
+        callAmount = game.maxRaise - self.chipsBetInRound
+
+        if callAmount == 0:
+            print("Checks")
+            game.consecutiveCalls += 1
+            return
+
+        # a fish is basically just a calling machine
+        action = random.choices(["raise", "call", "fold"], weights=[1, 4, 1])[0]
+
+        if action == "raise":
+            raiseAmount = random.randint(1, self.chips)
+            print(f"Raises ${raiseAmount}")
+            self.bet(raiseAmount, game)
+        elif action == "call":
+            print("Calls")
+            self.call(game)
+        else:
+            print("Folds")
+            self.fold()
+
+        game.actionTaken = True
 
 
-class BotPlayer(Player):
+class NaiveBotPlayer(Player):
+    def botAction(self, game):
+        callAmount = game.maxRaise - self.chipsBetInRound
+
+        # checks if it is able to
+        if callAmount == 0:
+            print("Checks")
+            game.consecutiveCalls += 1
+            return
+
+        # weighted choice between raising caling and folding, with a weight against raising
+        action = random.choices(["raise", "call", "fold"], weights=[1, 3, 2])[0]
+
+        if action == "raise":
+            raiseAmount = random.randint(1, self.chips)
+            print(f"Raises ${raiseAmount}")
+            self.bet(raiseAmount, game)
+        elif action == "call":
+            print("Calls")
+            self.call(game)
+        else:
+            print("Folds")
+            self.fold()
+
+        game.actionTaken = True
+
+
+"""
+This class is named after a friend who notoriously employs this
+strategy when playing online poker. It is highly volatile and not 
+recommended; usually, it it only effective against other degenerate
+gamblers
+"""
+
+
+class TurnerBotPlayer(Player):
+    def botAction(self, game):
+        self.updateCheckOrCall(game)
+        self.calculatePotOdds(game)
+
+        callAmount = game.maxRaise - self.chipsBetInRound
+
+        if game.stage == 0 and callAmount < 40:
+            print("Turner calls preflop")
+            self.call(game)
+        elif self.hasGreatHand():
+            print("Turner All-In-s")
+            self.allIn(game)
+        else:
+            print("Turner Folds")
+            self.fold()
+
+        game.actionTaken = True
+
+    def hasGreatHand(self):
+        handStrength = self.evaluateHandStrength()
+        greatHands = ["Quads", "Full House", "Flush", "Straight", "Triplets"]
+        return handStrength in greatHands
+
+
+class ConservativeBotPlayer(Player):
     def botAction(self, game):
         self.updateCheckOrCall(game)
         self.calculatePotOdds(game)
@@ -399,247 +535,86 @@ class BotPlayer(Player):
         potSize = game.pot + callAmount
         winProbability = self.winProbability / 100
 
-        # expected value
-        ev = potSize * winProbability
+        ev = potSize * winProbability - callAmount
 
         print(
-            f"ev: ${ev}, pot size: {potSize}, call amount: {callAmount}, win p {winProbability}"
+            f"EV: ${ev}, Pot Size: {potSize}, Call Amount: {callAmount}, Win Probability: {winProbability}"
         )
 
-        randomSmallNumber = random.uniform(1, 25)  # using uniform for floats
-        if ev > (callAmount + randomSmallNumber):  # positive EV with some randomness
-            additionalEV = ev - callAmount
-            raiseMultiplier = random.uniform(1, 1.25)
-            raiseAmount = callAmount + additionalEV * raiseMultiplier
+        conservativeCheckThreshold = 15 + 0.05 * potSize
+        conservativeCallThreshold = -5
+        conservativeRaiseThreshold = 20
 
-            raiseAmount = int(min(raiseAmount, self.chips))
+        if callAmount == 0:
+            if ev < conservativeCheckThreshold:
+                print("Checks")
+                game.consecutiveCalls += 1
+                return
 
-            if raiseAmount > callAmount:
-                print(f"raises ${raiseAmount}")
-                self.bet(raiseAmount, game)
+        if ev > conservativeRaiseThreshold:
+            if self.chips < callAmount:
+                print("All-In due to insufficient chips")
+                self.allIn(game)
             else:
-                # if the bot can't raise due to chip limit
-                self.botCheckOrCall(game)
-
-        elif ev > callAmount:  # if EV justifies calling
-            self.botCheckOrCall(game)
-
+                raiseFactor = 1.1  # Only slightly above the minimum raise
+                raiseAmount = int(min(callAmount * raiseFactor, self.chips))
+                print(f"Raises ${raiseAmount}")
+                self.bet(raiseAmount, game)
+        elif ev > conservativeCallThreshold:
+            print("Calls")
+            self.call(game)
         else:
-            print("folds")
+            print("Folds")
             self.fold()
 
         game.actionTaken = True
 
-    def botCheckOrCall(self, game):
+
+class AdvancedBotPlayer(Player):
+    def botAction(self, game):
+        self.updateCheckOrCall(game)
+        self.calculatePotOdds(game)
+
+        # position relative to button
+        position = (game.currentPlayerIndex - game.bigBlindIndex) % NUM_PLAYERS
+
+        positionFactor = (
+            NUM_PLAYERS - position
+        ) / NUM_PLAYERS  # More aggressive in later positions
+
         callAmount = game.maxRaise - self.chipsBetInRound
-        if callAmount == 0 or self.chips < callAmount:
-            print("checks")
-            game.consecutiveCalls += 1  #! TODO: unify check method
-        else:
-            print("calls")
+        potSize = game.pot + callAmount
+        winProbability = self.winProbability / 100
+
+        ev = potSize * winProbability - callAmount
+        adjustedEV = ev * positionFactor
+
+        if callAmount == 0:
+            if adjustedEV < 10 * positionFactor:
+                print("Checks")
+                game.consecutiveCalls += 1
+                return
+
+        if adjustedEV > 0:
+            if self.chips < callAmount:
+                print("All-In due to insufficient chips")
+                self.allIn(game)
+            elif self.chips > 2 * callAmount:
+                raiseAmount = int(
+                    min(callAmount + random.uniform(1, self.chips / 4), self.chips)
+                )
+                print(f"Raises ${raiseAmount}")
+                self.bet(raiseAmount, game)
+            else:
+                print("Calls")
+                self.call(game)
+        elif (
+            adjustedEV > -10 * positionFactor
+        ):  # Small negative EV, but worth seeing the cards
+            print("Calls")
             self.call(game)
-
-
-# * graphics
-
-
-def setupGame(app):
-    app.backgroundColor = "green"
-    app.padding = 20
-    app.buttonWidth = 80
-    app.buttonHeight = 40
-    app.checkButtonLocation = (700, 800)
-    app.raiseButtonLocation = (800, 800)
-    app.foldButtonLocation = (900, 800)
-
-    app.showOtherPlayersCards = False
-    app.toggleButtonLocation = (800, 850)
-
-    app.betAmountStr = ""
-
-    app.game = Game()
-    app.game.updateAllPlayersPotOdds()
-
-
-def drawTable(app):
-    ovalWidth = app.width * 0.8
-    ovalHeight = app.height * 0.6
-    ovalX = app.width / 2
-    ovalY = app.height / 2 - 45 - app.padding / 2
-    drawOval(ovalX, ovalY, ovalWidth, ovalHeight, fill="seaGreen")
-
-
-def drawPlayerArea(app, playerIndex, player):
-    angle = (
-        360 / NUM_PLAYERS * (playerIndex + 1)
-    )  #! + 1 makes the human player appear on the bottom right. DOESN'T MODIFY ACTUAL INDECES
-    centerX = app.width / 2
-    centerY = app.height / 2 - Y_OFFSET - app.padding
-    radiusX = 400
-    radiusY = 300
-
-    playerX = centerX + radiusX * cos(radians(angle))
-    playerY = centerY + radiusY * sin(radians(angle))
-    drawCircle(playerX, playerY, 30, fill="black")
-    drawLabel(str(player.chips), playerX, playerY, size=14, fill="white")
-
-    if playerIndex == 0 or app.showOtherPlayersCards:
-        drawCards(app, playerX, playerY + 40, player.hand, player.isFolded)
-        handStrength = player.evaluateHandStrength(app.game.communityCards)
-        probLabel = f"{handStrength}, Win: {player.winProbability:.1f}%"
-        drawLabel(probLabel, playerX, playerY - 40, size=14, fill="black")
-    else:
-        drawFacedownCards(app, playerX, playerY + 40, len(player.hand), player.isFolded)
-
-
-def drawCommunityCards(app):
-    startX = app.width / 2
-    startY = app.height / 2 - Y_OFFSET - app.padding
-
-    numCardsToDraw = len(app.game.communityCards)
-    drawCards(app, startX, startY, app.game.communityCards[:numCardsToDraw])
-
-
-def drawCards(app, startX, startY, hand, isFolded=False):
-    cardWidth = 60
-    cardHeight = 90
-    cardGap = 15
-    cardsCount = len(hand)
-    cardsTotalWidth = cardsCount * cardWidth + (cardsCount - 1) * cardGap
-    startX -= cardsTotalWidth / 2
-
-    for i, card in enumerate(hand):
-        cardStr = Card.int_to_pretty_str(card)[1:-1]
-
-        if cardStr[-1] in [
-            "♥",
-            "♦",
-        ]:
-            suitColor = "red"
         else:
-            suitColor = "black"
+            print("Folds")
+            self.fold()
 
-        cardX = startX + i * (cardWidth + cardGap)
-        fillColor = "grey" if isFolded else "white"
-        drawRect(
-            cardX, startY, cardWidth, cardHeight, fill=fillColor, border="darkSlateGray"
-        )
-        drawLabel(
-            cardStr,
-            cardX + cardWidth / 2,
-            startY + cardHeight / 2,
-            size=22,
-            fill=suitColor,
-        )
-
-
-def drawFacedownCards(app, startX, startY, numCards, isFolded=False):
-    cardWidth = 60
-    cardHeight = 90
-    cardGap = 15
-    cardsTotalWidth = numCards * cardWidth + (numCards - 1) * cardGap
-    startX -= cardsTotalWidth / 2
-
-    fillColor = "grey" if isFolded else "red"
-
-    for i in range(numCards):
-        cardX = startX + i * (cardWidth + cardGap)
-        drawRect(
-            cardX, startY, cardWidth, cardHeight, fill=fillColor, border="darkSlateGray"
-        )
-
-
-def drawButton(app, text, position):
-    x, y = position
-    drawRect(x, y, app.buttonWidth, app.buttonHeight, fill="lightCoral")
-    drawLabel(text, x + app.buttonWidth / 2, y + app.buttonHeight / 2, size=14)
-
-
-def isWithinButton(app, mouseX, mouseY, buttonPosition):
-    x, y = buttonPosition
-    return x <= mouseX <= x + app.buttonWidth and y <= mouseY <= y + app.buttonHeight
-
-
-# * Event Functions
-
-
-def onMousePress(app, mouseX, mouseY):
-    humanPlayer = app.game.players[0]
-
-    if app.game.currentPlayerIndex != 0:
-        print("It's not your turn.")
-        return
-
-    if humanPlayer.isFolded:
-        print("Player has already folded")
-        return
-
-    # check/call dependent on hasRaised
-    if isWithinButton(app, mouseX, mouseY, app.checkButtonLocation):
-        if humanPlayer.checkOrCall == "Call":
-            print("Human player calls")
-            humanPlayer.call(app.game)
-            app.game.actionTaken = True
-        else:
-            print("Human player checks")
-            app.game.actionTaken = True
-
-    if isWithinButton(app, mouseX, mouseY, app.raiseButtonLocation):
-        betAmount = int(app.betAmountStr) if app.betAmountStr else 0
-        humanPlayer.bet(betAmount, app.game)
-        print(f"Human player bets ${betAmount}")
-        app.game.actionTaken = True
-        app.betAmountStr = ""
-
-    elif isWithinButton(app, mouseX, mouseY, app.foldButtonLocation):
-        humanPlayer.fold()
-        print("Human player folds")
-        app.game.actionTaken = True
-
-    if isWithinButton(app, mouseX, mouseY, app.toggleButtonLocation):
-        app.showOtherPlayersCards = not (app.showOtherPlayersCards)
-
-    # move to next
-    if app.game.actionTaken:
-        app.game.nextPlayer()
-
-
-def onKeyPress(app, key):
-    if key.isdigit():
-        app.betAmountStr += key
-
-    elif key == "delete" or key == "backspace":
-        # remove the last digit and update the bet button label
-        app.betAmountStr = app.betAmountStr[:-1]
-
-
-# * App Loop
-def onAppStart(app):
-    setupGame(app)
-
-
-def redrawAll(app):
-    raiseButtonLabel = f"Bet: ${app.betAmountStr if app.betAmountStr else '0'}"
-
-    drawTable(app)
-    for i, player in enumerate(app.game.players):
-        drawPlayerArea(app, i, player)
-    drawCommunityCards(app)
-
-    drawLabel(
-        f"Pot: ${app.game.pot}",
-        app.width / 2,
-        app.height / 2 + 20,
-        size=20,
-        fill="white",
-    )
-    humanPlayer = app.game.players[0]
-
-    toggleButtonText = "Hide" if app.showOtherPlayersCards else "Reveal"
-    drawButton(app, toggleButtonText, app.toggleButtonLocation)
-    drawButton(app, humanPlayer.checkOrCall, app.checkButtonLocation)
-    drawButton(app, raiseButtonLabel, app.raiseButtonLocation)
-    drawButton(app, "Fold", app.foldButtonLocation)
-
-
-runApp(width=1200, height=1000)
+        game.actionTaken = True
